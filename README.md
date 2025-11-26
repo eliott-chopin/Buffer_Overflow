@@ -52,4 +52,13 @@ On visualise alors :
 L’exploitation d’un buffer overflow n’est pas seulement un exercice offensif.  
 Elle permet de comprendre **pourquoi les protections modernes existent** (ASLR, NX, Stack Canary, RELRO…).
 
+### 5. Compilation
+Sans les protections de sécurité (mode démonstration)
+gcc vulnerable.c -o vuln -fno-stack-protector -z execstack
+
+
+Vous pouvez activer l’ASLR systématiquement pour vos tests :
+
+echo 0 | sudo tee /proc/sys/kernel/randomize_va_space
+
 ---
