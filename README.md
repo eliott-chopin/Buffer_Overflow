@@ -54,19 +54,19 @@ On visualise alors :
 - les registres modifiés.
 
 
-🔥 Exploitation pas-à-pas : calcul de l’offset (pattern-create / pattern-offset)
+### 🔥 Exploitation pas-à-pas : calcul de l’offset (pattern-create / pattern-offset)
 
 Cette section montre comment exploiter le programme vulnérable étape par étape, exactement comme en audit sécurité ou CTF.
 
-🧩 Étape 1 — Générer un pattern unique
+#### 🧩 Étape 1 — Générer un pattern unique
 
 L’objectif est de déterminer après combien d’octets le programme écrase le pointeur de retour (EIP/RIP).
 On utilise un cyclic pattern qui permet de retrouver précisément l’offset du crash.
 
-Méthode 1 — Metasploit (msf-pattern_create)
+##### Méthode 1 — Metasploit (msf-pattern_create)
 /usr/share/metasploit-framework/tools/exploit/pattern_create.rb -l 200
 
-Méthode 2 — Pwntools
+##### Méthode 2 — Pwntools
 python3 - <<EOF
 from pwn import *
 print(cyclic(200))
@@ -77,7 +77,7 @@ Copiez la chaîne générée, par exemple :
 
 Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2Ab3...
 
-🧭 Étape 2 — Lancer le programme avec ce pattern
+#### 🧭 Étape 2 — Lancer le programme avec ce pattern
 ./vuln $(python3 -c 'from pwn import *; print(cyclic(200))')
 
 
@@ -88,7 +88,7 @@ Segmentation fault (core dumped)
 
 Parfait : on a écrasé quelque chose d’important.
 
-🧠 Étape 3 — Identifier l’EIP écrasé (sur x86) ou RIP (x64)
+##### 🧠 Étape 3 — Identifier l’EIP écrasé (sur x86) ou RIP (x64)
 
 Ouvrir dans gdb :
 
@@ -105,7 +105,7 @@ EIP: 0x35624134
 Note la valeur de l’EIP/RIP.
 Exemple ici : 0x35624134.
 
-🎯 Étape 4 — Calculer l’offset précis
+#### 🎯 Étape 4 — Calculer l’offset précis
 Méthode Metasploit
 /usr/share/metasploit-framework/tools/exploit/pattern_offset.rb -q 35624134
 
@@ -125,7 +125,7 @@ Résultat exemple :
 
 Ce nombre correspond à la taille du buffer vulnérable (char buffer[32]), ce qui confirme l’analyse.
 
-🧪 Étape 5 — Vérifier que l’on contrôle bien l’EIP/RIP
+#### 🧪 Étape 5 — Vérifier que l’on contrôle bien l’EIP/RIP
 
 Maintenant qu’on connaît l’offset, on envoie une charge utile structurée :
 
